@@ -1,0 +1,122 @@
+name: build_win_cuda
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+      cuda:
+        description: 'cuda version used to build'
+        required: false
+        type: string
+        default: '12.6.1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  contents: write # for creating release
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+  
+
+  windows-2019-cmake-cuda:
+    runs-on: windows-2019
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+      
+      - uses: Jimver/cuda-toolkit@v0.2.19
+        id: cuda-toolkit
+        with:
+          cuda: '12.2.0'
+      
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-cuda${{ github.event.inputs.cuda }}
+
+      # - name: Install Ninja
+      #   id: install_ninja
+      #   run: |
+      #     choco install ninja
+
+      # - name: Build
+      #   id: cmake_build
+      #   shell: cmd
+      #   run: |
+      #     call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+      #     cmake -S . -B build -G "Ninja Multi-Config" -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=ON -DGGML_RPC=ON
+      #     set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+      #     cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+      #     cmake --build build --config Release
+
+      # use configuration from https://github.com/LostRuins/koboldcpp/blob/concedo/.github/workflows/kcpp-build-release-win-cuda12.yaml
+      - name: Build
+        id: cmake_build
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DLLAMA_CUBLAS=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake --build . --config Release -j 2      
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+          name: llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+
+      - name: Copy and pack Cuda runtime
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: |
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip $dst\*
+
+      - name: Upload Cuda runtime
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+
