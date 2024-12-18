@@ -105,7 +105,6 @@ jobs:
           name: llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
 
       - name: Copy and pack Cuda runtime
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
           echo "Cuda install location: ${{ env.CUDA_PATH }}"
           $dst='.\build\bin\cudart\'
@@ -120,3 +119,34 @@ jobs:
           path: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
           name: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
 
+      - name: Create release
+        id: create_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: anzz1/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+  
+      - name: Upload release
+        id: upload_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./artifact/release')) {
+              if (path.extname(file) === '.zip') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                });
+              }
+            }
