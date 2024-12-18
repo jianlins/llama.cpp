@@ -119,6 +119,16 @@ jobs:
           path: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
           name: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
 
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release          
+
       - name: Create release
         id: create_release
         if: ${{ github.event.inputs.create_release == 'true' }}
