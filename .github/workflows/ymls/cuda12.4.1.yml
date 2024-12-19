@@ -1,0 +1,8 @@
+name: cuda12.4.1
+channels:
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.10
+  - nvidia/label/cuda-12.4.1::cuda
+  - pip

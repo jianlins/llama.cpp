@@ -1,0 +1,242 @@
+name: build_win_cuda_full
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+      cuda:
+        description: 'cuda version used to build'
+        required: false
+        type: string
+        default: '12.4.1'
+      python:
+        description: 'cuda version used to build'
+        required: false
+        type: string
+        default: '3.10'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  contents: write # for creating release
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+  
+
+  windows-2019-cmake-cuda:
+    runs-on: windows-2019
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Check Setting Folder
+        run: |
+          pwd
+          ls ${{ github.event.inputs.build_folder }}        
+        shell: bash
+      
+      - name: Cache Miniforge Environment
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.event.inputs.target_folder }}/${{ github.event.inputs.build_folder }}
+          key: ${{ runner.os }}-${{ github.event.inputs.build_folder }}-${{ hashFiles('${{ github.event.inputs.build_folder }}/environment.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-conda-cuda-${{ github.event.inputs.cuda }}-
+
+        
+      - name: run pre build script
+        shell: pwsh {0}
+        run: |
+          cd ${{ github.event.inputs.build_folder }}     
+          pwd
+          if (Test-Path -Path ".\pre_build.ps1") {
+            # sometimes the activate above doesn't work for the following ps1
+            pwsh .\pre_build.ps1 ${{ github.event.inputs.target_folder }}\${{ github.event.inputs.build_folder }} 
+          }else{
+            pwd 
+            ls
+            Write-Output ".\pre_build.ps1 doesn't exist. Skip executing it."
+          }            
+
+      - name: Install miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest         
+          activate-environment: ${{ github.event.inputs.target_folder }}/${{ github.event.inputs.build_folder }}
+          environment-file: ${{ github.event.inputs.build_folder }}/environment.yml        
+          auto-activate-base: false        
+
+      
+      - name: Create Conda Environment
+        shell: pwsh
+        run: |
+          Write-Host "Creating new environment: cuda${{ github.event.inputs.cuda }}."
+          conda install -y python=${{ github.event.inputs.python }} pip 'cuda${{ github.event.inputs.cuda }}' -c nvidia/label/cuda-${{ github.event.inputs.cuda }}
+          echo "clean up cache..."
+          conda clean --all -f -y
+          pip cache purge
+
+      - name: check final environment settings
+        run: |
+          conda activate cuda${{ github.event.inputs.cuda }}
+          python -m pip install --upgrade pip
+          pip install customtkinter==5.2.0 pyinstaller==5.11.0 psutil==5.9.5
+          conda env export
+
+      - name: Download and install win64devkit
+        run: |
+          curl -L https://github.com/skeeto/w64devkit/releases/download/v1.22.0/w64devkit-1.22.0.zip --output w64devkit.zip
+          Expand-Archive w64devkit.zip -DestinationPath .
+
+      - name: Add w64devkit to PATH
+        run: |
+          echo $env:GITHUB_PATH
+          echo "$(Get-Location)\w64devkit\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Print System Environment Variables
+        id: printvars
+        run: |
+          echo "Number of processors: ${env:NUMBER_OF_PROCESSORS}"
+          echo "Processor Architecture: ${env:PROCESSOR_ARCHITECTURE}"
+          echo "Computer Name: ${env:COMPUTERNAME}"
+          wmic cpu get name
+          wmic os get TotalVisibleMemorySize, FreePhysicalMemory
+    
+      
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-cuda${{ github.event.inputs.cuda }}
+
+      # - name: Install Ninja
+      #   id: install_ninja
+      #   run: |
+      #     choco install ninja
+
+      # - name: Build
+      #   id: cmake_build
+      #   shell: cmd
+      #   run: |
+      #     call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+      #     cmake -S . -B build -G "Ninja Multi-Config" -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=ON -DGGML_RPC=ON
+      #     set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+      #     cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+      #     cmake --build build --config Release
+
+      # use configuration from https://github.com/LostRuins/koboldcpp/blob/concedo/.github/workflows/kcpp-build-release-win-cuda12.yaml
+      - name: Build
+        id: cmake_build
+        run: |
+          conda activate cuda${{ github.event.inputs.cuda }}
+          mkdir build
+          cd build
+          # '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=ON'
+          # cmake ..  -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake .. -DGGML_CUDA=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake --build . --config Release -j 2      
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}-${{ github.event.inputs.cuda }}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=WinFull-${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}-${{ github.event.inputs.cuda }}" >> $GITHUB_OUTPUT
+          fi
+
+      # - name: Pack artifacts
+      #   id: pack_artifacts
+      #   if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+      #   run: |
+      #     7z a llama-${{ steps.tag.outputs.name }}-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: .\build\bin\Release\*
+          name: llamacpp-win-condabuild-cu${{ github.event.inputs.cuda }}-x64.zip
+
+      # - name: Copy and pack Cuda runtime
+      #   run: |
+      #     echo "Cuda install location: ${{ env.CUDA_PATH }}"
+      #     $dst='.\build\bin\cudart\'
+      #     robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+      #     robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+      #     7z a cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip $dst\*
+
+      # - name: Upload Cuda runtime
+      #   if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     path: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+      #     name: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release          
+
+      - name: Create release
+        id: create_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: anzz1/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+  
+      - name: Upload release
+        id: upload_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./artifact/release')) {
+              if (path.extname(file) === '.zip') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                });
+              }
+            }
