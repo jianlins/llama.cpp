@@ -1,4 +1,4 @@
-name: build_win_cuda_full
+name: build_win_cuda_conda
 
 on:
   workflow_dispatch: # allows manual triggering
