@@ -83,14 +83,17 @@ jobs:
       - name: Install miniforge
         uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-version: latest             
+          miniforge-version: latest 
+          activate-environment: cuda${{ github.event.inputs.cuda }}  
+          python-version: ${{ github.event.inputs.python }}         
           auto-activate-base: false        
 
       
       - name: Create Conda Environment
         shell: pwsh
         run: |
-          Write-Host "Creating new environment: cuda${{ github.event.inputs.cuda }}."
+          Write-Host "Creating new environment: cuda${{ github.event.inputs.cuda }}"
+          conda activate cuda${{ github.event.inputs.cuda }}
           conda install -y python=${{ github.event.inputs.python }} pip 'cuda' -c nvidia/label/cuda-${{ github.event.inputs.cuda }}
           echo "clean up cache..."
           conda clean --all -f -y
