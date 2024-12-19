@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Creating new environment: cuda${{ github.event.inputs.cuda }}."
-          conda install -y python=${{ github.event.inputs.python }} pip 'cuda${{ github.event.inputs.cuda }}' -c nvidia/label/cuda-${{ github.event.inputs.cuda }}
+          conda install -y python=${{ github.event.inputs.python }} pip 'cuda' -c nvidia/label/cuda-${{ github.event.inputs.cuda }}
           echo "clean up cache..."
           conda clean --all -f -y
           pip cache purge
