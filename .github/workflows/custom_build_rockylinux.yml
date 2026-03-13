@@ -151,6 +151,15 @@ jobs:
           tar -czf "${OUTDIR}.tar.gz" "${OUTDIR}"
           sha256sum "${OUTDIR}.tar.gz" > "${OUTDIR}.tar.gz.sha256"
 
+      - name: Upload workflow artifact
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}
+          path: |
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz.sha256
+
       - name: Upload release assets
         if: github.event_name == 'release' || github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
@@ -159,3 +168,4 @@ jobs:
           files: |
             ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz
             ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz.sha256
+
