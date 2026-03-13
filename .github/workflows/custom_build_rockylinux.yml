@@ -97,6 +97,7 @@ jobs:
             -G Ninja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DGGML_CUDA=ON \
+            -DGGML_NATIVE=OFF \
             -DCMAKE_CUDA_COMPILER=$(command -v nvcc) \
             -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}" \
             -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined
